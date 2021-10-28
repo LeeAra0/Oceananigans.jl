@@ -6,7 +6,8 @@ using JLD2
 using Oceananigans.Architectures
 using Oceananigans.Grids
 using Oceananigans.Fields
-using Oceananigans.Grids: interior_parent_indices
+
+using Oceananigans.Grids: topology, total_size, interior_parent_indices
 using Oceananigans.Fields: show_location
 
 import Oceananigans: short_show
@@ -24,6 +25,10 @@ struct FieldTimeSeries{X, Y, Z, K, A, T, D, G, B, χ} <: AbstractDataField{X, Y,
         return new{X, Y, Z, K, A, T, D, G, B, χ}(data, arch, grid, bcs, times)
     end
 end
+
+#####
+##### Constructors
+#####
 
 """
     FieldTimeSeries{LX, LY, LZ}([architecture = CPU()], grid, times, boundary_conditions=nothing)
@@ -43,9 +48,6 @@ end
 # CPU() default
 FieldTimeSeries{LX, LY, LZ}(grid::AbstractGrid, times, bcs=nothing) where {LX, LY, LZ} =
     FieldTimeSeries{LX, LY, LZ}(CPU(), grid, times, bcs)
-
-# Include the time dimension.
-@inline Base.size(fts::FieldTimeSeries) = (size(location(fts), fts.grid)..., length(fts.times))
 
 @propagate_inbounds Base.getindex(f::FieldTimeSeries{LX, LY, LZ, InMemory}, i, j, k, n) where {LX, LY, LZ} = f.data[i, j, k, n]
 
@@ -107,10 +109,8 @@ function FieldTimeSeries(path, name, architecture, backend::InMemory;
         boundary_conditions = file["timeseries/$name/serialized/boundary_conditions"]
     end
 
-    close(file)
-
     LX, LY, LZ = location
-
+  
     time_series = FieldTimeSeries{LX, LY, LZ}(architecture, grid, times, boundary_conditions)
 
     set!(time_series, path, name)
@@ -120,8 +120,6 @@ end
 
 Base.getindex(fts::InMemoryFieldTimeSeries{LX, LY, LZ}, n::Int) where {LX, LY, LZ} =
     Field(LX, LY, LZ, fts.architecture, fts.grid, fts.boundary_conditions, view(fts.data, :, :, :, n))
-
-backend_str(::InMemory) = "InMemory"
 
 #####
 ##### set!
@@ -161,9 +159,11 @@ function set!(time_series::InMemoryFieldTimeSeries, path::String, name::String)
         file_index = findfirst(t -> t ≈ time, file_times)
         file_iter = file_iterations[file_index]
 
-        set!(time_series[n], Field(location(time_series), path, name, file_iter,
-                                   boundary_conditions = time_series.boundary_conditions),
-                                   grid = time_series.grid)
+        field_n = Field(location(time_series), path, name, file_iter,
+                        boundary_conditions = time_series.boundary_conditions,
+                        grid = time_series.grid)
+
+        set!(time_series[n], field_n)
     end
 
     close(file)
@@ -208,7 +208,6 @@ Base.parent(vf::ViewField) = view(parent(parent(vf.data)), parent_indices.(vf.da
          interior_parent_indices(Z, topology(f, 3), f.grid.Nz, f.grid.Hz),
          :)
 
-
 #####
 ##### OnDisk time serieses
 #####
@@ -237,6 +236,28 @@ function FieldTimeSeries(path, name, architecture, backend::OnDisk; grid=nothing
     return FieldTimeSeries{LX, LY, LZ, OnDisk}(data, architecture, grid, bcs, times)
 end
 
+# For creating an empty `FieldTimeSeries`.
+function FieldTimeSeries(grid, location, times; architecture=CPU(), ArrayType=array_type(architecture), name="", filepath="", bcs=nothing)
+    LX, LY, LZ = location
+
+    Nt = length(times)
+    data_size = total_size(location, grid)
+
+    raw_data = zeros(data_size..., Nt) |> ArrayType
+    data = offset_data(raw_data, grid, location)
+
+    return FieldTimeSeries{LX, LY, LZ}(InMemory(), data, architecture, grid, bcs, times, name, filepath, 4)
+end
+
+#####
+##### Methods
+#####
+
+# Include the time dimension.
+@inline Base.size(fts::FieldTimeSeries) = (size(location(fts), fts.grid)..., length(fts.times))
+
+@propagate_inbounds Base.getindex(f::FieldTimeSeries{X, Y, Z, InMemory}, i, j, k, n) where {X, Y, Z} = f.data[i, j, k, n]
+
 function Base.getindex(fts::FieldTimeSeries{X, Y, Z, OnDisk}, n::Int) where {X, Y, Z}
     # Load data
     file = jldopen(fts.data.path)
@@ -251,6 +272,13 @@ function Base.getindex(fts::FieldTimeSeries{X, Y, Z, OnDisk}, n::Int) where {X, 
     return Field(loc..., fts.architecture, fts.grid, fts.boundary_conditions, field_data)
 end
 
+Base.setindex!(fts::FieldTimeSeries, val, inds...) = Base.setindex!(fts.data, val, inds...)
+
+#####
+##### Show methods
+#####
+
+backend_str(::InMemory) = "InMemory"
 backend_str(::OnDisk) = "OnDisk"
 
 #####

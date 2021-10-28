@@ -109,6 +109,8 @@ function FieldTimeSeries(path, name, architecture, backend::InMemory;
 
     close(file)
 
+    LX, LY, LZ = location
+
     time_series = FieldTimeSeries{LX, LY, LZ}(architecture, grid, times, boundary_conditions)
 
     set!(time_series, path, name)

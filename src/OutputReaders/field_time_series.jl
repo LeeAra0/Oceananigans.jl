@@ -82,9 +82,6 @@ Keyword arguments
 FieldTimeSeries(filepath, name; architecture=CPU(), grid=nothing, ArrayType=array_type(architecture), backend=InMemory()) =
     FieldTimeSeries(filepath, name, architecture, grid, ArrayType, backend)
 
-function FieldTimeSeries(filepath, name, architecture, grid, ArrayType, backend::InMemory)
-    file = jldopen(filepath)
-
 const InMemoryFieldTimeSeries{X, Y, Z} = FieldTimeSeries{X, Y, Z, InMemory}
 
 struct UnspecifiedBoundaryConditions end

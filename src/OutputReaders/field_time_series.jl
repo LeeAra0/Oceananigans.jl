@@ -79,12 +79,11 @@ Keyword arguments
            comparison to recorded save times. Defaults to times associated with `iterations`.
            Takes precedence over `iterations` if `times` is specified.
 """
-FieldTimeSeries(path, name; architecture=CPU(), backend=InMemory(), kwargs...) =
-    FieldTimeSeries(path, name, architecture, backend; kwargs...)
+FieldTimeSeries(filepath, name; architecture=CPU(), grid=nothing, ArrayType=array_type(architecture), backend=InMemory()) =
+    FieldTimeSeries(filepath, name, architecture, grid, ArrayType, backend)
 
-#####
-##### InMemory time serieses
-#####
+function FieldTimeSeries(filepath, name, architecture, grid, ArrayType, backend::InMemory)
+    file = jldopen(filepath)
 
 const InMemoryFieldTimeSeries{X, Y, Z} = FieldTimeSeries{X, Y, Z, InMemory}
 
@@ -143,6 +142,7 @@ function Field(location, path::String, name::String, iter;
 
     close(file)
 
+    raw_data = zeros(data_size..., Nt) |> ArrayType
     data = offset_data(raw_data, grid, location)
 
     return Field(location, architecture, grid, boundary_conditions, data)
@@ -258,6 +258,9 @@ end
 
 @propagate_inbounds Base.getindex(f::FieldTimeSeries{X, Y, Z, InMemory}, i, j, k, n) where {X, Y, Z} = f.data[i, j, k, n]
 
+Base.getindex(fts::FieldTimeSeries{X, Y, Z, InMemory}, n::Int) where {X, Y, Z} =
+    Field((X, Y, Z), fts.architecture, fts.grid, fts.boundary_conditions, fts.data[:, :, :, n])
+
 function Base.getindex(fts::FieldTimeSeries{X, Y, Z, OnDisk}, n::Int) where {X, Y, Z}
     # Load data
     file = jldopen(fts.data.path)
@@ -273,6 +276,12 @@ function Base.getindex(fts::FieldTimeSeries{X, Y, Z, OnDisk}, n::Int) where {X, 
 end
 
 Base.setindex!(fts::FieldTimeSeries, val, inds...) = Base.setindex!(fts.data, val, inds...)
+
+interior(f::FieldTimeSeries{X, Y, Z}) where {X, Y, Z} =
+    view(parent(f), interior_parent_indices(X, topology(f, 1), f.grid.Nx, f.grid.Hx),
+                    interior_parent_indices(Y, topology(f, 2), f.grid.Ny, f.grid.Hy),
+                    interior_parent_indices(Z, topology(f, 3), f.grid.Nz, f.grid.Hz),
+                    :)
 
 #####
 ##### Show methods

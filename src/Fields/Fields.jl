@@ -24,6 +24,7 @@ include("computed_field.jl")
 include("kernel_computed_field.jl")
 include("pressure_field.jl")
 include("function_field.jl")
+include("regridding_fields.jl")
 include("set!.jl")
 include("tracer_names.jl")
 include("validate_field_tuple_grid.jl")
@@ -33,7 +34,6 @@ include("interpolate.jl")
 include("field_slicer.jl")
 include("show_fields.jl")
 include("broadcasting_abstract_fields.jl")
-include("mapreduce_abstract_fields.jl")
 
 # Fallback: cannot infer boundary conditions.
 boundary_conditions(field) = nothing

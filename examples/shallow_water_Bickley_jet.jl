@@ -20,7 +20,7 @@
 #
 # ```julia
 # using Pkg
-# pkg"add Oceananigans, NCDatasets, Plots, Printf, Polynomials"
+# pkg"add Oceananigans, NCDatasets, Polynomials, CairoMakie"
 # ```
 
 using Oceananigans
@@ -103,15 +103,15 @@ u = uh / h
 v = vh / h
 
 ## Build and compute mean vorticity discretely
-ω = ComputedField(∂x(v) - ∂y(u))
+ω = Field(∂x(v) - ∂y(u))
 compute!(ω)
 
 ## Copy mean vorticity to a new field
-ωⁱ = Field(Face, Face, Nothing, model.architecture, model.grid)
+ωⁱ = Field{Face, Face, Nothing}(model.grid)
 ωⁱ .= ω
 
 ## Use this new field to compute the perturbation vorticity
-ω′ = ComputedField(ω - ωⁱ)
+ω′ = Field(ω - ωⁱ)
 
 # and finally set the "true" initial condition with noise,
 
@@ -138,18 +138,18 @@ perturbation_norm(args...) = norm(v)
 # Output every `t = 1.0`.
 
 simulation.output_writers[:fields] = NetCDFOutputWriter(model, (; ω, ω′),
-                                                        filepath = joinpath(@__DIR__, "shallow_water_Bickley_jet_fields.nc"),
+                                                        filename = joinpath(@__DIR__, "shallow_water_Bickley_jet_fields.nc"),
                                                         schedule = TimeInterval(1),
-                                                        mode = "c")
+                                                        overwrite_existing = true)
 
 # Build the `output_writer` for the growth rate, which is a scalar field.
 # Output every time step.
 
 simulation.output_writers[:growth] = NetCDFOutputWriter(model, (; perturbation_norm),
-                                                        filepath = joinpath(@__DIR__, "shallow_water_Bickley_jet_perturbation_norm.nc"),
+                                                        filename = joinpath(@__DIR__, "shallow_water_Bickley_jet_perturbation_norm.nc"),
                                                         schedule = IterationInterval(1),
                                                         dimensions = (; perturbation_norm = ()),
-                                                        mode = "c")
+                                                        overwrite_existing = true)
 
 # And finally run the simulation.
 
@@ -159,7 +159,7 @@ run!(simulation)
 
 # Load required packages to read output and plot.
 
-using NCDatasets, Plots, Printf
+using NCDatasets, Printf, CairoMakie
 nothing # hide
 
 # Define the coordinates for plotting.
@@ -167,55 +167,60 @@ nothing # hide
 x, y = xnodes(ω), ynodes(ω)
 nothing # hide
 
-# Define keyword arguments for plotting the contours.
-
-kwargs = (
-         xlabel = "x",
-         ylabel = "y",
-         aspect = 1,
-           fill = true,
-         levels = 20,
-      linewidth = 0,
-          color = :balance,
-       colorbar = true,
-           ylim = (-Ly/2, Ly/2),
-           xlim = (0, Lx)
-)
-nothing # hide
-
 # Read in the `output_writer` for the two-dimensional fields and then create an animation 
 # showing both the total and perturbation vorticities.
 
 ds = NCDataset(simulation.output_writers[:fields].filepath, "r")
 
-iterations = keys(ds["time"])
+times = ds["time"][:]
 
-anim = @animate for (iter, t) in enumerate(ds["time"])
-    ω = ds["ω"][:, :, 1, iter]
-    ω′ = ds["ω′"][:, :, 1, iter]
+n = Observable(1)
 
-    ω′_max = maximum(abs, ω′)
+ω = @lift ds["ω"][:, :, 1, $n]
+ω′ = @lift ds["ω′"][:, :, 1, $n]
 
-    plot_ω = contour(x, y, ω',
-                     clim = (-1, 1), 
-                     title = @sprintf("Total vorticity, ω, at t = %.1f", t); kwargs...)
-                      
-    plot_ω′ = contour(x, y, ω′',
-                      clim = (-ω′_max, ω′_max),
-                      title = @sprintf("Perturbation vorticity, ω - ω̄, at t = %.1f", t); kwargs...)
+ω′_lims = @lift (-maximum(abs, ds["ω′"][:, 1, :, $n]), maximum(abs, ds["ω′"][:, 1, :, $n]))
 
-    plot(plot_ω, plot_ω′, layout = (1, 2), size = (800, 440))
+title = @lift @sprintf("t = %.1f", times[$n])
+
+fig = Figure(resolution = (800, 440))
+
+axis_kwargs = (xlabel = "x",
+               ylabel = "y",
+               aspect = AxisAspect(1),
+               limits = ((0, Lx), (-Ly/2, Ly/2)))
+
+ax_ω = Axis(fig[2, 1]; title = "total vorticity, ω", axis_kwargs...)
+ax_ω′ = Axis(fig[2, 3]; title = "perturbation vorticity, ω - ω̄", axis_kwargs...)
+
+hm_ω = heatmap!(ax_ω, x, y, ω, colorrange = (-1, 1), colormap = :balance)
+Colorbar(fig[2, 2], hm_ω)
+
+hm_ω′ = heatmap!(ax_ω′, x, y, ω′, colormap = :balance)
+Colorbar(fig[2, 4], hm_ω′)
+
+fig[1, :] = Label(fig, title, textsize=24, tellwidth=false)
+
+# Finally, we record a movie.
+
+frames = 1:length(times)
+
+record(fig, "shallow_water_Bickley_jet.mp4", frames, framerate=12) do i
+       @info "Plotting frame $i of $(frames[end])..."
+       n[] = i
 end
+nothing #hide
+
+# ![](shallow_water_Bickley_jet.mp4)
+
+# It's always good practice to close the NetCDF files when we are done.
 
 close(ds)
-
-mp4(anim, "shallow_water_Bickley_jet.mp4", fps=15)
+nothing # hide
 
 # Read in the `output_writer` for the scalar field (the norm of ``v``-velocity).
 
 ds2 = NCDataset(simulation.output_writers[:growth].filepath, "r")
-
-iterations = keys(ds2["time"])
 
      t = ds2["time"][:]
 norm_v = ds2["perturbation_norm"][:]
@@ -243,20 +248,23 @@ constant, slope = linear_fit_polynomial[0], linear_fit_polynomial[1]
 
 best_fit = @. exp(constant + slope * t)
 
-plot(t, norm_v,
-        yaxis = :log,
-        ylims = (1e-3, 30),
-           lw = 4,
-        label = "norm(v)", 
-       xlabel = "time",
-       ylabel = "norm(v)",
-        title = "growth of perturbation norm",
-       legend = :bottomright)
+lines(t, norm_v;
+      linewidth = 4,
+      label = "norm(v)", 
+      axis = (yscale = log10,
+              limits = (nothing, (1e-3, 30)),
+              xlabel = "time",
+              ylabel = "norm(v)",
+               title = "growth of perturbation norm"))
 
-plot!(t[I], 2 * best_fit[I], # factor 2 offsets fit from curve for better visualization
-           lw = 4,
-        label = "best fit")
-            
+lines!(t[I], 2 * best_fit[I]; # factor 2 offsets fit from curve for better visualization
+       linewidth = 4,
+       label = "best fit")
+
+axislegend()
+
+fig # hide
+
 # The slope of the best-fit curve on a logarithmic scale approximates the rate at which instability
 # grows in the simulation. Let's see how this compares with the theoretical growth rate.
 

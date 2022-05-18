@@ -2,6 +2,8 @@ using Oceananigans.TimeSteppers: update_state!
 
 import Oceananigans.Fields: set!
 
+using Oceananigans.Utils: @apply_regionally, apply_regionally!
+
 """
     set!(model; kwargs...)
 
@@ -38,9 +40,10 @@ function set!(model::HydrostaticFreeSurfaceModel; kwargs...)
         elseif fldname ∈ propertynames(model.free_surface)
             ϕ = getproperty(model.free_surface, fldname)
         else
-            throw(ArgumentError("name $fldname not found in model.velocities, model.tracers, or model.free_surface."))
+            throw(ArgumentError("name $fldname not found in model.velocities, model.tracers, or model.free_surface"))
         end
-        set!(ϕ, value)
+
+        @apply_regionally set!(ϕ, value)
     end
 
     update_state!(model)

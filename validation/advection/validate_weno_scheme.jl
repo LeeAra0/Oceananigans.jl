@@ -46,9 +46,9 @@ coord     = Dict()
 time      = Dict()
 
 # 1D grid constructions
-grid_reg  = RectilinearGrid(size = (N,), x = Freg,  halo = (3,), topology = (Periodic, Flat, Flat), architecture = arch)    
-grid_str  = RectilinearGrid(size = (N,), x = Fsaw,  halo = (3,), topology = (Periodic, Flat, Flat), architecture = arch)    
-grid_str2 = RectilinearGrid(size = (N,), x = Fstr2, halo = (3,), topology = (Periodic, Flat, Flat), architecture = arch)    
+grid_reg  = RectilinearGrid(arch, size = N, x = Freg,  halo = 3, topology = (Periodic, Flat, Flat))    
+grid_str  = RectilinearGrid(arch, size = N, x = Fsaw,  halo = 3, topology = (Periodic, Flat, Flat))    
+grid_str2 = RectilinearGrid(arch, size = N, x = Fstr2, halo = 3, topology = (Periodic, Flat, Flat))    
 
 # placeholder for the four different advection schemes 
 #  (1) WENO5(), 
@@ -67,7 +67,7 @@ c₀_2D(x, y, z) = mask(x) * mask(y)
 # Checking the accuracy of different schemes with different settings
 for (gr, grid) in enumerate([grid_reg, grid_str, grid_str2])
     
-    U = Field(Face, Center, Center, arch, grid)
+    U = Field{Face, Center, Center}(grid)
     parent(U) .= 1
 
     Δt_max   = 0.2 * min_Δx(grid)
@@ -75,17 +75,16 @@ for (gr, grid) in enumerate([grid_reg, grid_str, grid_str2])
                                             
     for (adv, scheme) in enumerate(advection) 
         if adv == 2
-            scheme = WENO5(grid = grid)
+            scheme = WENO5(grid)
         end
         if adv == 3
-            scheme = WENO5(grid = grid, stretched_smoothness = true)
+            scheme = WENO5(grid, stretched_smoothness = true)
         end
         if adv == 4
-            scheme = WENO5(grid = grid, stretched_smoothness = true, zweno = true)
+            scheme = WENO5(grid, stretched_smoothness = true, zweno = true)
         end
 
-        model = HydrostaticFreeSurfaceModel(architecture = arch,
-                                                    grid = grid,
+        model = HydrostaticFreeSurfaceModel(        grid = grid,
                                                  tracers = :c,
                                         tracer_advection = scheme,
                                               velocities = PrescribedVelocityFields(u=U), 
@@ -139,8 +138,8 @@ grid_str2 = RectilinearGrid(size = (N, N), x = Fstr2, y = Fstr2, halo = (3, 3), 
 
 for (gr, grid) in enumerate([grid_reg, grid_str, grid_str2])
     
-    U = Field(Face, Center, Center, arch, grid)
-    V = Field(Center, Face, Center, arch, grid)
+    U = Field{Face, Center, Center}(grid)
+    V = Field{Center, Face, Center}(grid)
 
     parent(U) .= 1
     parent(V) .= 0.3
@@ -152,17 +151,16 @@ for (gr, grid) in enumerate([grid_reg, grid_str, grid_str2])
     for (adv, scheme) in enumerate(advection) 
 
         if adv == 2
-            scheme = WENO5(grid = grid)
+            scheme = WENO5(grid)
         end
         if adv == 3
-            scheme = WENO5(grid = grid, stretched_smoothness = true)
+            scheme = WENO5(grid, stretched_smoothness = true)
         end
         if adv == 4
-            scheme = WENO5(grid = grid, stretched_smoothness = true, zweno = true)
+            scheme = WENO5(grid, stretched_smoothness = true, zweno = true)
         end
 
-        model = HydrostaticFreeSurfaceModel(architecture = arch,
-                                                    grid = grid,
+        model = HydrostaticFreeSurfaceModel(        grid = grid,
                                                 tracers  = :c,
                                         tracer_advection = scheme,
                                             velocities   = PrescribedVelocityFields(u=U, v=V), 

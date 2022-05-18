@@ -13,20 +13,41 @@ import Oceananigans.TimeSteppers: ab2_step!
 
 function ab2_step!(model::HydrostaticFreeSurfaceModel, Δt, χ)
 
-    workgroup, worksize = work_layout(model.grid, :xyz)
+    # Step locally velocity and tracers
+    @apply_regionally prognostic_field_events = local_ab2_step!(model, Δt, χ)
+    
+    # blocking step for implicit free surface, non blocking for explicit
+    prognostic_field_events = ab2_step_free_surface!(model.free_surface, model, Δt, χ, prognostic_field_events)
 
-    explicit_velocity_step_events = ab2_step_velocities!(model.velocities, model, Δt, χ)
-    explicit_tracer_step_events = ab2_step_tracers!(model.tracers, model, Δt, χ)
-    free_surface_event = ab2_step_free_surface!(model.free_surface, model, Δt, χ,
-                                                MultiEvent(Tuple(explicit_velocity_step_events)))
+    # waiting all the ab2 steps (velocities, free_surface and tracers to complete)
+    @apply_regionally wait(device(model.architecture), prognostic_field_events)
 
-    prognostic_field_events = MultiEvent(tuple(free_surface_event,
-                                               explicit_velocity_step_events...,
-                                               explicit_tracer_step_events...))
 
-    wait(device(model.architecture), prognostic_field_events)
+    # @apply_regionally local_ab2_step!(model, Δt, χ)
+    # ab2_step_free_surface!(model.free_surface, model, Δt, χ, nothing)    
 
     return nothing
+end
+
+function local_ab2_step!(model, Δt, χ)
+
+    if model.free_surface isa SplitExplicitFreeSurface
+        sefs = model.free_surface
+        u, v, _ = model.velocities
+        barotropic_mode!(sefs.state.U, sefs.state.V, model.grid, u, v)
+    end
+
+    explicit_velocity_step_events = ab2_step_velocities!(model.velocities, model, Δt, χ)
+    explicit_tracer_step_events   = ab2_step_tracers!(model.tracers, model, Δt, χ)
+    
+    prognostic_field_events = (tuple(explicit_velocity_step_events...),
+        tuple(explicit_tracer_step_events...))
+
+    return prognostic_field_events    
+
+    # wait(device(model.architecture), MultiEvent(tuple(explicit_velocity_step_events..., explicit_tracer_step_events...)))
+
+    # return nothing
 end
 
 #####
@@ -60,14 +81,11 @@ function ab2_step_velocities!(velocities, model, Δt, χ)
         # Note that BatchedTridiagonalSolver has a hard `wait`; this must be solved first.
         implicit_step!(velocity_field,
                        model.timestepper.implicit_solver,
+                       model.closure,
+                       model.diffusivity_fields,
+                       nothing,
                        model.clock,
                        Δt,
-                       model.closure,
-                       nothing,
-                       model.diffusivity_fields,
-                       model.velocities,
-                       model.tracers,
-                       model.buoyancy,
                        dependencies = explicit_velocity_step_events[i])
     end
 
@@ -101,19 +119,19 @@ function ab2_step_tracers!(tracers, model, Δt, χ)
 
     for (tracer_index, tracer_name) in enumerate(propertynames(tracers))
         tracer_field = tracers[tracer_name]
+        explicit_tracer_step_event = explicit_tracer_step_events[tracer_index]
+        closure = model.closure
 
         implicit_step!(tracer_field,
                        model.timestepper.implicit_solver,
+                       closure,
+                       model.diffusivity_fields,
+                       Val(tracer_index),
                        model.clock,
                        Δt,
-                       model.closure,
-                       tracer_index,
-                       model.diffusivity_fields,
-                       model.velocities,
-                       model.tracers,
-                       model.buoyancy,
-                       dependencies = explicit_tracer_step_events[tracer_index])
+                       dependencies = explicit_tracer_step_event)
     end
 
     return explicit_tracer_step_events
 end
+

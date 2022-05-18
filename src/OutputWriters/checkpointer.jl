@@ -1,30 +1,27 @@
 using Glob
 import Oceananigans.Fields: set!
 
+using Oceananigans: fields
 using Oceananigans.Fields: offset_data
 using Oceananigans.TimeSteppers: RungeKutta3TimeStepper, QuasiAdamsBashforth2TimeStepper
 
 mutable struct Checkpointer{T, P} <: AbstractOutputWriter
-      schedule :: T
-           dir :: String
-        prefix :: String
+    schedule :: T
+    dir :: String
+    prefix :: String
     properties :: P
-         force :: Bool
-       verbose :: Bool
-       cleanup :: Bool
+    overwrite_existing :: Bool
+    verbose :: Bool
+    cleanup :: Bool
 end
 
 """
     Checkpointer(model; schedule,
-                        dir = ".",
-                     prefix = "checkpoint",
-                      force = false,
-                    verbose = false,
-                    cleanup = false,
-                 properties = [:architecture, :grid, :clock, :coriolis,
-                               :buoyancy, :closure, :velocities, :tracers,
-                               :timestepper, :particles]
-                )
+                 dir = ".",
+                 prefix = "checkpoint",
+                 overwrite_existing = false,
+                 cleanup = false,
+                 additional_kwargs...)
 
 Construct a `Checkpointer` that checkpoints the model to a JLD2 file on `schedule.`
 The `model.clock.iteration` is included in the filename to distinguish between multiple checkpoint files.
@@ -51,7 +48,7 @@ Keyword arguments
 
 - `prefix`: Descriptive filename prefixed to all output files. Default: "checkpoint".
 
-- `force`: Remove existing files if their filenames conflict. Default: `false`.
+- `overwrite_existing`: Remove existing files if their filenames conflict. Default: `false`.
 
 - `verbose`: Log what the output writer is doing with statistics on compute/write times
              and file sizes. Default: `false`.
@@ -59,21 +56,22 @@ Keyword arguments
 - `cleanup`: Previous checkpoint files will be deleted once a new checkpoint file is written.
              Default: `false`.
 
-- `properties`: List of model properties to checkpoint. Some are required.
+- `properties`: List of model properties to checkpoint. This list must contain
+                `[:grid, :architecture, :timestepper, :particles]`.
+                Default: [:architecture, :grid, :clock, :coriolis, :buoyancy, :closure,
+                          :velocities, :tracers, :timestepper, :particles]
 """
 function Checkpointer(model; schedule,
-                             dir = ".",
-                          prefix = "checkpoint",
-                           force = false,
-                         verbose = false,
-                         cleanup = false,
+                      dir = ".",
+                      prefix = "checkpoint",
+                      overwrite_existing = false,
+                      verbose = false,
+                      cleanup = false,
                       properties = [:architecture, :grid, :clock, :coriolis,
-                                    :buoyancy, :closure, :velocities, :tracers,
-                                    :timestepper, :particles]
-                     )
+                                    :buoyancy, :closure, :timestepper, :particles])
 
     # Certain properties are required for `restore_from_checkpoint` to work.
-    required_properties = (:grid, :architecture, :velocities, :tracers, :timestepper, :particles)
+    required_properties = (:grid, :architecture, :timestepper, :particles)
 
     for rp in required_properties
         if rp ∉ properties
@@ -94,7 +92,7 @@ function Checkpointer(model; schedule,
 
     mkpath(dir)
 
-    return Checkpointer(schedule, dir, prefix, properties, force, verbose, cleanup)
+    return Checkpointer(schedule, dir, prefix, properties, overwrite_existing, verbose, cleanup)
 end
 
 #####
@@ -165,6 +163,12 @@ function write_output!(c::Checkpointer, model)
     jldopen(filepath, "w") do file
         file["checkpointed_properties"] = c.properties
         serializeproperties!(file, model, c.properties)
+
+        model_fields = fields(model)
+        field_names = keys(model_fields)
+        for name in field_names
+            serializeproperty!(file, string(name), model_fields[name])
+        end
     end
 
     t2, sz = time_ns(), filesize(filepath)
@@ -201,27 +205,19 @@ function set!(model, filepath::AbstractString)
         # Validate the grid
         checkpointed_grid = file["grid"]
 
-	if model.grid isa ImmersedBoundaryGrid
-            model.grid.grid == checkpointed_grid || 
-            error("The grid associated with $filepath and the underlying `ImmersedBoundaryGrid.grid` are not the same!")
-        else
-         model.grid == checkpointed_grid ||
+        model.grid == checkpointed_grid ||
              error("The grid associated with $filepath and model.grid are not the same!")
-	end
 
-        # Set model fields and tendency fields
-        model_fields = merge(model.velocities, model.tracers)
+        model_fields = fields(model)
 
         for name in propertynames(model_fields)
-            # Load data for each model field
-            address = name ∈ (:u, :v, :w) ? "velocities/$name" : "tracers/$name"
-            parent_data = file[address * "/data"]
-
-            model_field = model_fields[name]
-            copyto!(model_field.data.parent, parent_data)
-
-            # Restore timestepper tendencies and other metadata
-            # Note: this step is unecessary for models that use RungeKutta3TimeStepper.
+            try
+                parent_data = file["$name/data"]
+                model_field = model_fields[name]
+                copyto!(model_field.data.parent, parent_data)
+            catch
+                @warn "Could not retore $name from checkpoint."
+            end
         end
 
         set_time_stepper!(model.timestepper, file, model_fields)

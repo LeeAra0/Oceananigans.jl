@@ -4,27 +4,26 @@ using OrderedCollections: OrderedDict
 using Oceananigans: AbstractModel, AbstractOutputWriter, AbstractDiagnostic
 
 using Oceananigans.Architectures: AbstractArchitecture, GPU
-using Oceananigans.Advection: AbstractAdvectionScheme, CenteredSecondOrder
+using Oceananigans.Advection: AbstractAdvectionScheme, CenteredSecondOrder, VectorInvariantSchemes, VectorInvariant, WENOVectorInvariant
 using Oceananigans.BuoyancyModels: validate_buoyancy, regularize_buoyancy, SeawaterBuoyancy, g_Earth
 using Oceananigans.BoundaryConditions: regularize_field_boundary_conditions
 using Oceananigans.Fields: Field, CenterField, tracernames, VelocityFields, TracerFields
 using Oceananigans.Forcings: model_forcing
-using Oceananigans.Grids: inflate_halo_size, with_halo, AbstractRectilinearGrid, AbstractCurvilinearGrid, AbstractHorizontallyCurvilinearGrid, architecture
+using Oceananigans.Grids: halo_size, inflate_halo_size, with_halo, AbstractRectilinearGrid
+using Oceananigans.Grids: AbstractCurvilinearGrid, AbstractHorizontallyCurvilinearGrid, architecture
 using Oceananigans.Models.NonhydrostaticModels: extract_boundary_conditions
 using Oceananigans.TimeSteppers: Clock, TimeStepper, update_state!
-using Oceananigans.TurbulenceClosures: with_tracers, DiffusivityFields, add_closure_specific_boundary_conditions
+using Oceananigans.TurbulenceClosures: validate_closure, with_tracers, DiffusivityFields, add_closure_specific_boundary_conditions
 using Oceananigans.TurbulenceClosures: time_discretization, implicit_diffusion_solver
 using Oceananigans.LagrangianParticleTracking: LagrangianParticles
 using Oceananigans.Utils: tupleit
-
-struct VectorInvariant end
 
 """ Returns a default_tracer_advection, tracer_advection `tuple`. """
 validate_tracer_advection(invalid_tracer_advection, grid) = error("$invalid_tracer_advection is invalid tracer_advection!")
 validate_tracer_advection(tracer_advection_tuple::NamedTuple, grid) = CenteredSecondOrder(), tracer_advection_tuple
 validate_tracer_advection(tracer_advection::AbstractAdvectionScheme, grid) = tracer_advection, NamedTuple()
 
-PressureField(arch, grid) = (; pHY′ = CenterField(arch, grid))
+PressureField(grid) = (; pHY′ = CenterField(grid))
 
 mutable struct HydrostaticFreeSurfaceModel{TS, E, A<:AbstractArchitecture, S,
                                            G, T, V, B, R, F, P, U, C, Φ, K, AF} <: AbstractModel{TS}
@@ -48,41 +47,47 @@ mutable struct HydrostaticFreeSurfaceModel{TS, E, A<:AbstractArchitecture, S,
 end
 
 """
-    HydrostaticFreeSurfaceModel(;
-                   grid,
-           architecture = CPU(),
-                  clock = Clock{eltype(grid)}(0, 0, 1),
-     momentum_advection = CenteredSecondOrder(),
-       tracer_advection = CenteredSecondOrder(),
-               buoyancy = SeawaterBuoyancy(eltype(grid)),
-               coriolis = nothing,
-                forcing = NamedTuple(),
-                closure = IsotropicDiffusivity(eltype(grid), ν=ν₀, κ=κ₀),
-    boundary_conditions = NamedTuple(),
-                tracers = (:T, :S),
-              particles = nothing,
-             velocities = nothing,
-               pressure = nothing,
-     diffusivity_fields = nothing,
-       auxiliary_fields = NamedTuple(),
+    HydrostaticFreeSurfaceModel(; grid,
+                                             clock = Clock{eltype(grid)}(0, 0, 1),
+                                momentum_advection = CenteredSecondOrder(),
+                                  tracer_advection = CenteredSecondOrder(),
+                                          buoyancy = SeawaterBuoyancy(eltype(grid)),
+                                          coriolis = nothing,
+                                      free_surface = ExplicitFreeSurface(gravitational_acceleration=g_Earth),
+                               forcing::NamedTuple = NamedTuple(),
+                                           closure = nothing,
+                   boundary_conditions::NamedTuple = NamedTuple(),
+                                           tracers = (:T, :S),
+    particles::Union{Nothing, LagrangianParticles} = nothing,
+                                        velocities = nothing,
+                                          pressure = nothing,
+                                diffusivity_fields = nothing,
+                                  auxiliary_fields = NamedTuple(),
     )
 
-Construct an hydrostatic `Oceananigans.jl` model with a free surface on `grid`.
+Construct a hydrostatic model with a free surface on `grid`.
 
 Keyword arguments
 =================
 
-  - `grid`: (required) The resolution and discrete geometry on which `model` is solved.
-  - `architecture`: `CPU()` or `GPU()`. The computer architecture used to time-step `model`.
-  - `gravitational_acceleration`: The gravitational acceleration applied to the free surface
-  - `advection`: The scheme that advects velocities and tracers. See `Oceananigans.Advection`.
+  - `grid`: (required) The resolution and discrete geometry on which `model` is solved. The
+    architecture (CPU/GPU) that the model is solve is inferred from the architecture of the grid.
+  - `momentum_advection`: The scheme that advects velocities. See `Oceananigans.Advection`.
+  - `tracer_advection`: The scheme that advects tracers. See `Oceananigans.Advection`.
   - `buoyancy`: The buoyancy model. See `Oceananigans.BuoyancyModels`.
-  - `closure`: The turbulence closure for `model`. See `Oceananigans.TurbulenceClosures`.
   - `coriolis`: Parameters for the background rotation rate of the model.
   - `forcing`: `NamedTuple` of user-defined forcing functions that contribute to solution tendencies.
+  - `free_surface`: The free surface model.
+  - `closure`: The turbulence closure for `model`. See `Oceananigans.TurbulenceClosures`.
   - `boundary_conditions`: `NamedTuple` containing field boundary conditions.
   - `tracers`: A tuple of symbols defining the names of the modeled tracers, or a `NamedTuple` of
                preallocated `CenterField`s.
+  - `particles`: Lagrangian particles to be advected with the flow. Default: `nothing`.
+  - `velocities`: The model velocities. Default: `nothing`.
+  - `pressure`: Hydrostatic pressure field. Default: `nothing`.
+  - `diffusivity_fields`: Diffusivity fields. Default: `nothing`.
+  - `auxiliary_fields`: `NamedTuple` of auxiliary fields. Default: `nothing`.
+
 """
 function HydrostaticFreeSurfaceModel(; grid,
                                              clock = Clock{eltype(grid)}(0, 0, 1),
@@ -102,14 +107,15 @@ function HydrostaticFreeSurfaceModel(; grid,
                                   auxiliary_fields = NamedTuple(),
     )
 
+    # Check halos and throw an error if the grid's halo is too small
+    @apply_regionally validate_model_halo(grid, momentum_advection, tracer_advection, closure)
+
     arch = architecture(grid)
-    @warn "HydrostaticFreeSurfaceModel is experimental. Use with caution!"
 
-    if arch == GPU() && !has_cuda()
+    arch == GPU() && !has_cuda() &&
          throw(ArgumentError("Cannot create a GPU model. No CUDA-enabled GPU was detected!"))
-    end
 
-    momentum_advection = validate_momentum_advection(momentum_advection, grid)
+    @apply_regionally validate_momentum_advection(momentum_advection, grid)
 
     tracers = tupleit(tracers) # supports tracers=:c keyword argument (for example)
 
@@ -136,7 +142,7 @@ function HydrostaticFreeSurfaceModel(; grid,
     # have precedence, followed by embedded, followed by default.
     boundary_conditions = merge(default_boundary_conditions, embedded_boundary_conditions, boundary_conditions)
     boundary_conditions = regularize_field_boundary_conditions(boundary_conditions, grid, prognostic_field_names)
-
+    
     # Finally, we ensure that closure-specific boundary conditions, such as
     # those required by TKEBasedVerticalDiffusivity, are enforced:
     boundary_conditions = add_closure_specific_boundary_conditions(closure, boundary_conditions, grid, tracernames(tracers), buoyancy)
@@ -144,22 +150,25 @@ function HydrostaticFreeSurfaceModel(; grid,
     # Ensure `closure` describes all tracers
     closure = with_tracers(tracernames(tracers), closure)
 
+    # Put CATKE first in the list of closures
+    closure = validate_closure(closure)
+
     # Either check grid-correctness, or construct tuples of fields
-    velocities         = HydrostaticFreeSurfaceVelocityFields(velocities, arch, grid, clock, boundary_conditions)
-    tracers            = TracerFields(tracers, arch, grid, boundary_conditions)
-    pressure           = PressureField(arch, grid)
-    diffusivity_fields = DiffusivityFields(diffusivity_fields, arch, grid, tracernames(tracers), boundary_conditions, closure)
+    velocities         = HydrostaticFreeSurfaceVelocityFields(velocities, grid, clock, boundary_conditions)
+    tracers            = TracerFields(tracers, grid, boundary_conditions)
+    pressure           = PressureField(grid)
+    diffusivity_fields = DiffusivityFields(diffusivity_fields, grid, tracernames(tracers), boundary_conditions, closure)
 
-    validate_velocity_boundary_conditions(velocities)
+    @apply_regionally validate_velocity_boundary_conditions(velocities)
 
-    free_surface = FreeSurface(free_surface, velocities, arch, grid)
+    free_surface = FreeSurface(free_surface, velocities, grid)
 
     # Instantiate timestepper if not already instantiated
-    implicit_solver = implicit_diffusion_solver(time_discretization(closure), arch, grid)
-    timestepper = TimeStepper(:QuasiAdamsBashforth2, arch, grid, tracernames(tracers);
+    implicit_solver = implicit_diffusion_solver(time_discretization(closure), grid)
+    timestepper = TimeStepper(:QuasiAdamsBashforth2, grid, tracernames(tracers);
                               implicit_solver = implicit_solver,
-                              Gⁿ = HydrostaticFreeSurfaceTendencyFields(velocities, free_surface, arch, grid, tracernames(tracers)),
-                              G⁻ = HydrostaticFreeSurfaceTendencyFields(velocities, free_surface, arch, grid, tracernames(tracers)))
+                              Gⁿ = HydrostaticFreeSurfaceTendencyFields(velocities, free_surface, grid, tracernames(tracers)),
+                              G⁻ = HydrostaticFreeSurfaceTendencyFields(velocities, free_surface, grid, tracernames(tracers)))
 
     # Regularize forcing for model tracer and velocity fields.
     model_fields = hydrostatic_prognostic_fields(velocities, free_surface, tracers)
@@ -194,6 +203,17 @@ end
 
 momentum_advection_squawk(momentum_advection, grid) = error("$(typeof(momentum_advection)) is not supported with $(typeof(grid))")
 
-validate_momentum_advection(momentum_advection, grid) = momentum_advection
+validate_momentum_advection(momentum_advection, grid) = nothing
 validate_momentum_advection(momentum_advection, grid::AbstractHorizontallyCurvilinearGrid) = momentum_advection_squawk(momentum_advection, grid)
-validate_momentum_advection(momentum_advection::Union{VectorInvariant, Nothing}, grid::AbstractHorizontallyCurvilinearGrid) = momentum_advection
+validate_momentum_advection(momentum_advection::Union{VectorInvariantSchemes, Nothing}, grid::AbstractHorizontallyCurvilinearGrid) = momentum_advection
+
+function validate_model_halo(grid, momentum_advection, tracer_advection, closure)
+  user_halo = halo_size(grid)
+  required_halo = inflate_halo_size(user_halo..., topology(grid),
+                                    momentum_advection,
+                                    tracer_advection,
+                                    closure)
+
+  any(user_halo .< required_halo) &&
+      throw(ArgumentError("The grid halo $user_halo must be larger than $required_halo."))
+end

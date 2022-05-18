@@ -10,7 +10,7 @@
 
 # ```julia
 # using Pkg
-# pkg"add Oceananigans, JLD2, Plots"
+# pkg"add Oceananigans, CairoMakie"
 # ```
 
 # ## The physical domain
@@ -58,7 +58,7 @@ model = NonhydrostaticModel(
                  grid = grid,
             advection = CenteredFourthOrder(),
           timestepper = :RungeKutta3,
-              closure = IsotropicDiffusivity(ν=1e-6, κ=1e-6),
+              closure = ScalarDiffusivity(ν=1e-6, κ=1e-6),
              coriolis = coriolis,
               tracers = :b,
     background_fields = (b=B,), # `background_fields` is a `NamedTuple`
@@ -122,14 +122,14 @@ set!(model, u=u₀, v=v₀, w=w₀, b=b₀)
 #
 # We're ready to release the packet. We build a simulation with a constant time-step,
 
-simulation = Simulation(model, Δt = 0.1 * 2π/ω, stop_iteration = 15)
+simulation = Simulation(model, Δt = 0.1 * 2π/ω, stop_iteration = 20)
 
 # and add an output writer that saves the vertical velocity field every two iterations:
 
 simulation.output_writers[:velocities] = JLD2OutputWriter(model, model.velocities,
                                                           schedule = IterationInterval(1),
-                                                            prefix = "internal_wave",
-                                                             force = true)
+                                                          filename = "internal_wave.jld2",
+                                                          overwrite_existing = true)
 
 # With initial conditions set and an output writer at the ready, we run the simulation
 
@@ -137,43 +137,61 @@ run!(simulation)
 
 # ## Animating a propagating packet
 #
-# To visualize the solution, we load snapshots of the data and use it to make contour
+# To visualize the solution, we load a `FieldTimeSeries` of `w` and make contour
 # plots of vertical velocity.
 
-using JLD2, Printf, Plots
+filename = "internal_wave"
 
-# We use coordinate arrays appropriate for the vertical velocity field,
+w_timeseries = FieldTimeSeries(filename * ".jld2", "w")
 
-x, y, z = nodes(model.velocities.w)
-nothing # hide
+# And build the the ``x, y, z`` grid for plotting purposes.
 
-# open the jld2 file with the data,
+x, y, z = nodes(w_timeseries)
 
-file = jldopen(simulation.output_writers[:velocities].filepath)
+#-
 
-## Extracts a vector of `iterations` at which data was saved.
-iterations = parse.(Int, keys(file["timeseries/t"]))
+using CairoMakie
 
-# and makes an animation with Plots.jl:
+fig = Figure(resolution = (800, 400))
 
-anim = @animate for (i, iter) in enumerate(iterations)
+ax = Axis(fig[2, 1];
+          xlabel = "x",
+          ylabel = "z",
+          limits = ((-π, π), (-π, π)),
+          aspect = AxisAspect(1))
 
-    @info "Drawing frame $i from iteration $iter..."
+nothing #hide
 
-    w = file["timeseries/w/$iter"][:, 1, :]
-    t = file["timeseries/t/$iter"]
+# We use Makie's `Observable` to animate the data. To dive into how `Observable`s work we
+# refer to [Makie.jl's Documentation](https://makie.juliaplots.org/stable/documentation/nodes/index.html).
 
-    contourf(x, z, w', title = @sprintf("ωt = %.2f", ω * t),
-                      levels = range(-1e-8, stop=1e-8, length=10),
-                       clims = (-1e-8, 1e-8),
-                      xlabel = "x",
-                      ylabel = "z",
-                       xlims = (-π, π),
-                       ylims = (-π, π),
-                   linewidth = 0,
-                       color = :balance,
-                      legend = false,
-                 aspectratio = :equal)
+n = Observable(1)
+
+title = @lift "ωt = " * string(round(w_timeseries.times[$n] * ω, digits=2))
+
+w = @lift interior(w_timeseries[$n], :, 1, :)
+
+# We plot the vertical velocity, ``w``.
+
+w_lim = 1e-8
+
+contourf!(ax, x, z, w; 
+          levels = range(-w_lim, stop=w_lim, length=10),
+          colormap = :balance,
+          colorrange = (-w_lim, w_lim),
+          extendlow = :auto,
+          extendhigh = :auto)
+
+fig[1, 1] = Label(fig, title, textsize=24, tellwidth=false)
+
+# And, finally, we record a movie.
+
+frames = 1:length(w_timeseries.times)
+
+record(fig, filename * ".mp4", frames, framerate=8) do i
+       @info "Plotting frame $i of $(frames[end])..."
+       n[] = i
 end
+nothing #hide
 
-mp4(anim, "internal_wave.mp4", fps = 8) # hide
+# ![](internal_wave.mp4)

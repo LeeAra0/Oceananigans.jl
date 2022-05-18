@@ -1,47 +1,40 @@
-for metric in (
-               :Δxᶜᶜᵃ,
-               :Δxᶜᶠᵃ,
-               :Δxᶠᶠᵃ,
-               :Δxᶠᶜᵃ,
+using Oceananigans.AbstractOperations: GridMetricOperation
 
-               :Δyᶜᶜᵃ,
-               :Δyᶜᶠᵃ,
-               :Δyᶠᶠᵃ,
-               :Δyᶠᶜᵃ,
+import Oceananigans.Grids: return_metrics, min_Δx, min_Δy, min_Δz
 
-               :Δzᵃᵃᶠ,
-               :Δzᵃᵃᶜ,
-               :Δzᶠᶜᶜ,
-               :Δzᶜᶠᶜ,
+const c = Center()
+const f = Face()
+const IBG = ImmersedBoundaryGrid
 
-               :Azᶜᶜᵃ,
-               :Azᶜᶠᵃ,
-               :Azᶠᶠᵃ,
-               :Azᶠᶜᵃ,
+# Grid metrics for ImmersedBoundaryGrid
+#
+# All grid metrics are defined here.
+#
+# For non "full-cell" immersed boundaries, grid metric functions
+# must be extended for the specific immersed boundary grid in question.
+#
+for LX in (:ᶜ, :ᶠ), LY in (:ᶜ, :ᶠ), LZ in (:ᶜ, :ᶠ)
+    for dir in (:x, :y, :z), operator in (:Δ, :A)
+    
+        metric = Symbol(operator, dir, LX, LY, LZ)
+        @eval begin
+            import Oceananigans.Operators: $metric
+            @inline $metric(i, j, k, ibg::IBG) = $metric(i, j, k, ibg.underlying_grid)
+        end
+    end
 
-               :Axᶜᶜᶜ, 
-               :Axᶠᶜᶜ,
-               :Axᶠᶠᶜ,
-               :Axᶜᶠᶜ,
-               :Axᶠᶜᶠ,
-               :Axᶜᶜᶠ,
-               
-               :Ayᶜᶜᶜ,
-               :Ayᶜᶠᶜ,
-               :Ayᶠᶜᶜ,
-               :Ayᶠᶠᶜ,
-               :Ayᶜᶠᶠ,
-               :Ayᶜᶜᶠ,
-
-               :Vᶜᶜᶜ, 
-               :Vᶠᶜᶜ,
-               :Vᶜᶠᶜ,
-               :Vᶜᶜᶠ,
-              )
-
+    volume = Symbol(:V, LX, LY, LZ)
     @eval begin
-        import Oceananigans.Operators: $metric
-        @inline $metric(i, j, k, ibg::ImmersedBoundaryGrid) = $metric(i, j, k, ibg.grid)
+        import Oceananigans.Operators: $volume
+        @inline $volume(i, j, k, ibg::IBG) = $volume(i, j, k, ibg.underlying_grid)
     end
 end
 
+@inline Δzᵃᵃᶜ(i, j, k, ibg::IBG) = Δzᵃᵃᶜ(i, j, k, ibg.underlying_grid)
+@inline Δzᵃᵃᶠ(i, j, k, ibg::IBG) = Δzᵃᵃᶠ(i, j, k, ibg.underlying_grid)
+
+
+return_metrics(grid::ImmersedBoundaryGrid) = return_metrics(grid.underlying_grid)
+min_Δx(grid::ImmersedBoundaryGrid) = min_Δx(grid.underlying_grid)
+min_Δy(grid::ImmersedBoundaryGrid) = min_Δy(grid.underlying_grid)
+min_Δz(grid::ImmersedBoundaryGrid) = min_Δz(grid.underlying_grid)

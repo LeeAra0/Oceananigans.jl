@@ -10,21 +10,26 @@ end
 
 export
     # Architectures
-    CPU, GPU,
+    CPU, GPU, 
 
     # Logging
     OceananigansLogger,
 
     # Grids
     Center, Face,
-    Periodic, Bounded, Flat,
+    Periodic, Bounded, Flat, 
+    FullyConnected, LeftConnected, RightConnected,
     RectilinearGrid, 
     LatitudeLongitudeGrid,
     ConformalCubedSphereFaceGrid,
     xnodes, ynodes, znodes, nodes,
 
+    # Immersed boundaries
+    ImmersedBoundaryGrid, GridFittedBoundary, GridFittedBottom, ImmersedBoundaryCondition,
+
     # Advection schemes
-    CenteredSecondOrder, CenteredFourthOrder, UpwindBiasedFirstOrder, UpwindBiasedThirdOrder, UpwindBiasedFifthOrder, WENO5,
+    CenteredSecondOrder, CenteredFourthOrder, UpwindBiasedFirstOrder, UpwindBiasedThirdOrder, UpwindBiasedFifthOrder, WENO5, 
+    VectorInvariant, EnergyConservingScheme, EnstrophyConservingScheme,
 
     # Boundary conditions
     BoundaryCondition,
@@ -33,11 +38,11 @@ export
 
     # Fields and field manipulation
     Field, CenterField, XFaceField, YFaceField, ZFaceField,
-    AveragedField, ComputedField, KernelComputedField, BackgroundField,
-    interior, set!, compute!, regrid!,
+    Average, Integral, Reduction, BackgroundField,
+    interior, set!, compute!, regrid!, location,
 
     # Forcing functions
-    Forcing, Relaxation, LinearTarget, GaussianMask,
+    Forcing, Relaxation, LinearTarget, GaussianMask, AdvectiveForcing,
 
     # Coriolis forces
     FPlane, ConstantCartesianCoriolis, BetaPlane, NonTraditionalBetaPlane,
@@ -51,14 +56,17 @@ export
     UniformStokesDrift,
 
     # Turbulence closures
-    IsotropicDiffusivity,
-    AnisotropicDiffusivity,
-    AnisotropicBiharmonicDiffusivity,
+    VerticalScalarDiffusivity,
+    HorizontalScalarDiffusivity,
+    ScalarDiffusivity,
+    VerticalScalarBiharmonicDiffusivity,
+    HorizontalScalarBiharmonicDiffusivity,
+    ScalarBiharmonicDiffusivity,
     SmagorinskyLilly,
     AnisotropicMinimumDissipation,
-    HorizontallyCurvilinearAnisotropicDiffusivity,
     ConvectiveAdjustmentVerticalDiffusivity,
     IsopycnalSkewSymmetricDiffusivity,
+    VerticallyImplicitTimeDiscretization,
 
     # Lagrangian particle tracking
     LagrangianParticles,
@@ -67,11 +75,12 @@ export
     NonhydrostaticModel,
     HydrostaticFreeSurfaceModel,
     ShallowWaterModel,
+    PressureField,
     fields,
 
     # Hydrostatic free surface model stuff
-    VectorInvariant, ExplicitFreeSurface, ImplicitFreeSurface,
-    HydrostaticSphericalCoriolis, VectorInvariantEnstrophyConserving, VectorInvariantEnergyConserving,
+    VectorInvariant, ExplicitFreeSurface, ImplicitFreeSurface, SplitExplicitFreeSurface,
+    HydrostaticSphericalCoriolis, 
     PrescribedVelocityFields,
 
     # Time stepping
@@ -86,7 +95,7 @@ export
     StateChecker, CFL, AdvectiveCFL, DiffusiveCFL,
 
     # Output writers
-    FieldSlicer, NetCDFOutputWriter, JLD2OutputWriter, Checkpointer,
+    NetCDFOutputWriter, JLD2OutputWriter, Checkpointer,
     TimeInterval, IterationInterval, AveragedTimeInterval, SpecifiedTimes,
     AndSchedule, OrSchedule,
 
@@ -96,18 +105,17 @@ export
     # Abstract operations
     ∂x, ∂y, ∂z, @at, KernelFunctionOperation,
 
-    # Cubed sphere
+    # MultiRegion and Cubed sphere
+    MultiRegionGrid, XPartition, 
     ConformalCubedSphereGrid,
 
     # Utils
-    prettytime
-
+    prettytime, apply_regionally!, construct_regionally, @apply_regionally, MultiRegionObject
 
 using Printf
 using Logging
 using Statistics
 using LinearAlgebra
-
 using CUDA
 using Adapt
 using DocStringExtensions
@@ -161,8 +169,6 @@ function write_output! end
 function location end
 function instantiated_location end
 function tupleit end
-function short_show end
-
 function fields end
 function prognostic_fields end
 function tracer_tendency_kernel_function end
@@ -180,8 +186,8 @@ include("Logger.jl")
 include("Operators/Operators.jl")
 include("BoundaryConditions/BoundaryConditions.jl")
 include("Fields/Fields.jl")
-include("Advection/Advection.jl")
 include("AbstractOperations/AbstractOperations.jl")
+include("Advection/Advection.jl")
 include("Solvers/Solvers.jl")
 include("Distributed/Distributed.jl")
 
@@ -204,6 +210,7 @@ include("OutputReaders/OutputReaders.jl")
 include("Simulations/Simulations.jl")
 
 # Abstractions for distributed and multi-region models
+include("MultiRegion/MultiRegion.jl")
 include("CubedSpheres/CubedSpheres.jl")
 
 #####
@@ -224,6 +231,7 @@ using .TurbulenceClosures
 using .LagrangianParticleTracking
 using .Solvers
 using .Forcings
+using .ImmersedBoundaries
 using .Distributed
 using .Models
 using .TimeSteppers
@@ -232,6 +240,7 @@ using .OutputWriters
 using .OutputReaders
 using .Simulations
 using .AbstractOperations
+using .MultiRegion
 using .CubedSpheres
 
 function __init__()

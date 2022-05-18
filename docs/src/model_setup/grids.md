@@ -1,6 +1,8 @@
 # Grids
 
-We currently support only `RectilinearGrid`s with either constant or variable grid spacings.
+We currently `RectilinearGrid`s with either constant or variable grid spacings and also
+`LatitudeLongitudeGrid` on the sphere.
+
 The spacings can be different for each dimension.
 
 A `RectilinearGrid` is constructed by specifying the `size` of the grid (a `Tuple` specifying
@@ -22,20 +24,29 @@ end
 
 ```jldoctest
 julia> grid = RectilinearGrid(size=(32, 64, 256), extent=(128, 256, 512))
-RectilinearGrid{Float64, Periodic, Periodic, Bounded} 
-             architecture: CPU()
-                   domain: x ∈ [0.0, 128.0], y ∈ [0.0, 256.0], z ∈ [-512.0, 0.0]
-                 topology: (Periodic, Periodic, Bounded)
-        size (Nx, Ny, Nz): (32, 64, 256)
-        halo (Hx, Hy, Hz): (1, 1, 1)
-             spacing in x: Regular, with spacing 4.0
-             spacing in y: Regular, with spacing 4.0
-             spacing in z: Regular, with spacing 2.0
+32×64×256 RectilinearGrid{Float64, Periodic, Periodic, Bounded} on CPU with 3×3×3 halo
+├── Periodic x ∈ [0.0, 128.0)  regularly spaced with Δx=4.0
+├── Periodic y ∈ [0.0, 256.0)  regularly spaced with Δy=4.0
+└── Bounded  z ∈ [-512.0, 0.0] regularly spaced with Δz=2.0
 ```
 
 !!! info "Default domain"
     When using the `extent` keyword, e.g., `extent = (Lx, Ly, Lz)`, then the ``x \in [0, L_x]``,
     ``y \in [0, L_y]``, and ``z \in [-L_z, 0]`` -- a sensible choice for oceanographic applications.
+
+## Specifying the grid's architecture
+
+The first positional argument in either `RectilinearGrid` or `LatitudeLongitudeGrid` is the grid's
+architecture. By default `architecture = CPU()`. By providing `GPU()` as the `architecture` argument
+we can construct the grid on GPU:
+
+```julia
+julia> grid = RectilinearGrid(GPU(), size=(32, 64, 256), extent=(128, 256, 512))
+32×64×256 RectilinearGrid{Float64, Periodic, Periodic, Bounded} on GPU with 3×3×3 halo
+├── Periodic x ∈ [0.0, 128.0)  regularly spaced with Δx=4.0
+├── Periodic y ∈ [0.0, 256.0)  regularly spaced with Δy=4.0
+└── Bounded  z ∈ [-512.0, 0.0] regularly spaced with Δz=2.0
+```
 
 ## Specifying the grid's topology
 
@@ -50,20 +61,14 @@ in the ``y``- and ``z``-dimensions is build with,
 
 ```jldoctest
 julia> grid = RectilinearGrid(topology=(Periodic, Bounded, Bounded), size=(64, 64, 32), extent=(1e4, 1e4, 1e3))
-RectilinearGrid{Float64, Periodic, Bounded, Bounded} 
-             architecture: CPU()
-                   domain: x ∈ [0.0, 10000.0], y ∈ [0.0, 10000.0], z ∈ [-1000.0, 0.0]
-                 topology: (Periodic, Bounded, Bounded)
-        size (Nx, Ny, Nz): (64, 64, 32)
-        halo (Hx, Hy, Hz): (1, 1, 1)
-             spacing in x: Regular, with spacing 156.25
-             spacing in y: Regular, with spacing 156.25
-             spacing in z: Regular, with spacing 31.25
+64×64×32 RectilinearGrid{Float64, Periodic, Bounded, Bounded} on CPU with 3×3×3 halo
+├── Periodic x ∈ [0.0, 10000.0) regularly spaced with Δx=156.25
+├── Bounded  y ∈ [0.0, 10000.0] regularly spaced with Δy=156.25
+└── Bounded  z ∈ [-1000.0, 0.0] regularly spaced with Δz=31.25
 ```
 
 The `Flat` topology is useful when running problems with fewer than 3 dimensions. As an example,
 to use a two-dimensional horizontal, doubly periodic domain the topology is `(Periodic, Periodic, Flat)`.
-
 
 ## Specifying domain end points
 
@@ -73,17 +78,11 @@ is constructed via
 
 ```jldoctest
 julia> grid = RectilinearGrid(size=(32, 16, 256), x=(-100, 100), y=(0, 12.5), z=(-π, π))
-RectilinearGrid{Float64, Periodic, Periodic, Bounded}  
-             architecture: CPU()
-                   domain: x ∈ [-100.0, 100.0], y ∈ [0.0, 12.5], z ∈ [-3.141592653589793, 3.141592653589793]
-                 topology: (Periodic, Periodic, Bounded)
-        size (Nx, Ny, Nz): (32, 16, 256)
-        halo (Hx, Hy, Hz): (1, 1, 1)
-             spacing in x: Regular, with spacing 6.25
-             spacing in y: Regular, with spacing 0.78125
-             spacing in z: Regular, with spacing 0.02454369260617026
+32×16×256 RectilinearGrid{Float64, Periodic, Periodic, Bounded} on CPU with 3×3×3 halo
+├── Periodic x ∈ [-100.0, 100.0)     regularly spaced with Δx=6.25
+├── Periodic y ∈ [0.0, 12.5)         regularly spaced with Δy=0.78125
+└── Bounded  z ∈ [-3.14159, 3.14159] regularly spaced with Δz=0.0245437
 ```
-
 
 ## Grids with non-regular spacing in some of the directions
 
@@ -108,15 +107,10 @@ julia> grid = RectilinearGrid(size = (Nx, Ny, Nz),
                               x = (0, Lx),
                               y = chebychev_spaced_y_faces,
                               z = chebychev_spaced_z_faces)
-RectilinearGrid{Float64, Periodic, Bounded, Bounded}  
-             architecture: CPU()
-                   domain: x ∈ [0.0, 10000.0], y ∈ [-5000.0, 5000.0], z ∈ [-1000.0, 0.0]
-                 topology: (Periodic, Bounded, Bounded)
-        size (Nx, Ny, Nz): (64, 64, 32)
-        halo (Hx, Hy, Hz): (1, 1, 1)
-             spacing in x: Regular, with spacing 156.25
-             spacing in y: Stretched, with spacing min=6.022718974138115, max=245.33837163709035
-             spacing in z: Stretched, with spacing min=2.407636663901485, max=49.008570164780394
+64×64×32 RectilinearGrid{Float64, Periodic, Bounded, Bounded} on CPU with 3×3×3 halo
+├── Periodic x ∈ [0.0, 10000.0)    regularly spaced with Δx=156.25
+├── Bounded  y ∈ [-5000.0, 5000.0] variably spaced with min(Δy)=6.02272, max(Δy)=245.338
+└── Bounded  z ∈ [-1000.0, 0.0]    variably spaced with min(Δz)=2.40764, max(Δz)=49.0086
 ```
 
 ```@setup 1
@@ -160,3 +154,21 @@ savefig("plot_stretched_grid.svg"); nothing # hide
 ```
 
 ![](plot_stretched_grid.svg)
+
+
+A simple latitude-longitude grid with `Float64` type can be constructed by
+
+```jldoctest
+julia> using Oceananigans
+
+julia> grid = LatitudeLongitudeGrid(size=(36, 34, 25),
+                                    longitude = (-180, 180),
+                                    latitude = (-85, 85),
+                                    z = (-1000, 0))
+36×34×25 LatitudeLongitudeGrid{Float64, Periodic, Bounded, Bounded} on CPU with 3×3×3 halo and with precomputed metrics
+├── longitude: Periodic λ ∈ [-180.0, 180.0) regularly spaced with Δλ=10.0
+├── latitude:  Bounded  φ ∈ [-85.0, 85.0]   regularly spaced with Δφ=5.0
+└── z:         Bounded  z ∈ [-1000.0, 0.0]  regularly spaced with Δz=40.0
+```
+
+For more examples see [`RectilinearGrid`](@ref) and [`LatitudeLongitudeGrid`](@ref).
